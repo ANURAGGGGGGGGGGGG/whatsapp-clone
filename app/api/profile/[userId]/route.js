@@ -15,12 +15,13 @@ function sanitizeProfile(input) {
 }
 
 export async function GET(_req, { params }) {
-  const userId = String(params?.userId || "").trim();
+  const resolvedParams = await params;
+  const userId = String(resolvedParams?.userId || "").trim();
   if (!userId) {
     return Response.json({ error: "Missing userId" }, { status: 400 });
   }
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const auth = cookieStore.get(AUTH_COOKIE)?.value;
   const cookieUserId = cookieStore.get(USER_ID_COOKIE)?.value;
   if (auth !== "1" || cookieUserId !== userId) {
@@ -38,12 +39,13 @@ export async function GET(_req, { params }) {
 }
 
 export async function PUT(req, { params }) {
-  const userId = String(params?.userId || "").trim();
+  const resolvedParams = await params;
+  const userId = String(resolvedParams?.userId || "").trim();
   if (!userId) {
     return Response.json({ error: "Missing userId" }, { status: 400 });
   }
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const auth = cookieStore.get(AUTH_COOKIE)?.value;
   const cookieUserId = cookieStore.get(USER_ID_COOKIE)?.value;
   if (auth !== "1" || cookieUserId !== userId) {

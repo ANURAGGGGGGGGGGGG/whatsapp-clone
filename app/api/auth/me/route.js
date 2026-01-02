@@ -16,7 +16,7 @@ function sanitizeProfile(input) {
 }
 
 export async function GET() {
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const auth = cookieStore.get(AUTH_COOKIE)?.value;
   const userId = cookieStore.get(USER_ID_COOKIE)?.value;
 

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -37,9 +38,12 @@ export default function LoginPage() {
       if (!res.ok) {
         throw new Error(typeof data?.error === "string" ? data.error : "Login failed");
       }
+      toast.success("Logged in");
       router.replace("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      const message = err instanceof Error ? err.message : "Login failed";
+      setError(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }

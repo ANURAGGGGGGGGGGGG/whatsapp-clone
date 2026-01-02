@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { toast } from "react-toastify";
 import KeyboardShortcuts from "./KeyboardShortcuts";
 
 function SmallIcon({ d, className }) {
@@ -103,9 +105,11 @@ export default function SettingsScreen({
   initialActive = null,
   onProfileChange,
 }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(null);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [privacyPrefs, setPrivacyPrefs] = useState({
     readReceipts: true,
     blockUnknownMessages: false,
@@ -318,6 +322,26 @@ export default function SettingsScreen({
     }
   };
 
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      const res = await fetch("/api/auth/logout", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Logout failed");
+      }
+      try {
+        window.localStorage.removeItem(USER_ID_STORAGE_KEY);
+      } catch {}
+      toast.success("Logged out");
+      router.replace("/login");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Logout failed");
+      setLoggingOut(false);
+    }
+  };
+
   const items = useMemo(
     () => [
       {
@@ -394,7 +418,6 @@ export default function SettingsScreen({
           },
           { id: "profile-photo", type: "nav", title: "Profile photo", subtitle: "My contacts" },
           { id: "about", type: "nav", title: "About", subtitle: "My contacts" },
-          { id: "status", type: "nav", title: "Status", subtitle: "My contacts" },
           {
             id: "read-receipts",
             type: "toggle",
@@ -475,14 +498,6 @@ export default function SettingsScreen({
             title: "Groups",
             subtitle: "Off",
             icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8",
-          },
-          {
-            id: "status",
-            type: "nav",
-            title: "Status",
-            subtitle: "Off",
-            icon: "M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1zm0 6a1 1 0 0 1 1 1v4l2.5 1.5a1 1 0 0 1-1 1.7l-3-1.8A1 1 0 0 1 11 13V8a1 1 0 0 1 1-1z",
-            highlight: true,
           },
           { id: "sec-toggles", type: "section", title: "" },
           {
@@ -668,6 +683,7 @@ export default function SettingsScreen({
                             value={phoneNational}
                             inputMode="numeric"
                             maxLength={selectedPhoneCountry?.max ?? 15}
+                            autoFocus
                             onChange={(e) => {
                               const max = selectedPhoneCountry?.max ?? 15;
                               const digits = e.target.value.replace(/[^\d]/g, "").slice(0, max);
@@ -684,12 +700,14 @@ export default function SettingsScreen({
                       ) : editing.field === "about" ? (
                         <textarea
                           value={draftValue}
+                          autoFocus
                           onChange={(e) => setDraftValue(e.target.value)}
                           className="mt-3 h-24 w-full resize-none rounded-lg bg-[#111b21] px-3 py-2 text-sm text-zinc-100 outline-none ring-1 ring-zinc-800 focus:ring-emerald-500/60"
                         />
                       ) : (
                         <input
                           value={draftValue}
+                          autoFocus
                           onChange={(e) => setDraftValue(e.target.value)}
                           className="mt-3 w-full rounded-lg bg-[#111b21] px-3 py-2 text-sm text-zinc-100 outline-none ring-1 ring-zinc-800 focus:ring-emerald-500/60"
                         />
@@ -1006,11 +1024,18 @@ export default function SettingsScreen({
                 </button>
               ))}
 
-              <button className="mt-2 flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left hover:bg-zinc-800/40">
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={loggingOut}
+                className="mt-2 flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left hover:bg-zinc-800/40 disabled:cursor-not-allowed disabled:opacity-70"
+              >
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800 text-rose-400">
                   <SmallIcon d="M10 17l5-5-5-5M15 12H3M21 21V3" className="h-5 w-5" />
                 </div>
-                <div className="text-sm font-semibold text-rose-400">Log out</div>
+                <div className="text-sm font-semibold text-rose-400">
+                  {loggingOut ? "Logging out..." : "Log out"}
+                </div>
               </button>
             </div>
           </>

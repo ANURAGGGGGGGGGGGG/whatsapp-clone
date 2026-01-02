@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import SettingsScreen from "./components/SettingsScreen";
+import { toast } from "react-toastify";
 
 function Icon({ name, className }) {
   const paths = {
@@ -140,88 +141,6 @@ function DateChip({ label }) {
     <div className="mx-auto my-3 inline-flex items-center rounded-full bg-zinc-800 px-3 py-1 text-[11px] text-zinc-300">
       {label}
     </div>
-  );
-}
-
-function StatusItem({ s, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-3 px-3 py-2 rounded-md transition-colors ${
-        active ? "bg-zinc-800" : "hover:bg-zinc-800/60"
-      }`}
-    >
-      <div
-        className={`rounded-full p-[2px] ${
-          s.seen ? "bg-zinc-700" : "bg-gradient-to-br from-emerald-500 to-emerald-400"
-        }`}
-      >
-        <Image
-          src={s.src}
-          alt={s.name}
-          width={36}
-          height={36}
-          className="h-9 w-9 rounded-full object-cover"
-        />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between">
-          <span className="truncate text-sm font-medium text-zinc-100">{s.name}</span>
-          <span className="text-[11px] text-zinc-400">{s.time}</span>
-        </div>
-      </div>
-    </button>
-  );
-}
-
-function StatusViewer({ status }) {
-  return (
-    <section className="flex min-h-screen flex-1 flex-col bg-[#0b141a]">
-      <div className="flex h-14 items-center justify-between border-b border-zinc-800 bg-[#202c33] px-4">
-        <div className="flex items-center gap-3">
-          {status ? (
-            <div className="rounded-full p-[2px] bg-gradient-to-br from-emerald-500 to-emerald-400">
-              <Image
-                src={status.src}
-                alt={status.name}
-                width={36}
-                height={36}
-                className="h-9 w-9 rounded-full object-cover"
-              />
-            </div>
-          ) : null}
-          <div className="flex flex-col">
-            <span className="text-sm font-medium">{status?.name || "Status"}</span>
-            <span className="text-[11px] text-zinc-400">{status?.time || ""}</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-4 text-zinc-300">
-          <Icon name="more" className="h-5 w-5" />
-        </div>
-      </div>
-      <div className="relative flex-1 p-6">
-        {!status ? (
-          <div className="flex h-full items-center justify-center text-zinc-400">
-            Select a status to view
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            <Image
-              src={status.src}
-              alt="Status"
-              width={800}
-              height={800}
-              className="max-h-[70vh] rounded-xl object-cover"
-            />
-            <div className="absolute left-0 right-0 top-0 p-4">
-              <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-700">
-                <div className="h-full w-full bg-emerald-500" />
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </section>
   );
 }
 
@@ -564,9 +483,6 @@ export default function Home() {
   const [activeId, setActiveId] = useState(chats[0]?.id || "");
   const [messages, setMessages] = useState({});
 
-  const [statuses, setStatuses] = useState([]);
-  const [activeStatusId, setActiveStatusId] = useState(null);
-
   const activeChat = useMemo(
     () => chats.find((c) => c.id === activeId),
     [chats, activeId]
@@ -614,6 +530,134 @@ export default function Home() {
   }, []);
 
   const [draft, setDraft] = useState("");
+  const [peopleQuery, setPeopleQuery] = useState("");
+  const [peopleResults, setPeopleResults] = useState([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [peopleError, setPeopleError] = useState("");
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [requestsError, setRequestsError] = useState("");
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [outgoingRequests, setOutgoingRequests] = useState([]);
+
+  const refreshRequests = async () => {
+    setRequestsLoading(true);
+    setRequestsError("");
+    try {
+      const res = await fetch("/api/requests?kind=all");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to load requests");
+      }
+      const list = Array.isArray(data?.requests) ? data.requests : [];
+      if (!userId) {
+        setIncomingRequests([]);
+        setOutgoingRequests([]);
+        return;
+      }
+      setIncomingRequests(list.filter((r) => r?.toUserId === userId));
+      setOutgoingRequests(list.filter((r) => r?.fromUserId === userId));
+    } catch (err) {
+      setIncomingRequests([]);
+      setOutgoingRequests([]);
+      setRequestsError(err instanceof Error ? err.message : "Failed to load requests");
+    } finally {
+      setRequestsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (section !== "people") return;
+    if (!userId) return;
+    refreshRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, userId]);
+
+  useEffect(() => {
+    if (section !== "people") return;
+    const q = peopleQuery.trim();
+    if (q.length < 2) {
+      setPeopleResults([]);
+      setPeopleError("");
+      setPeopleLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const t = window.setTimeout(async () => {
+      setPeopleLoading(true);
+      setPeopleError("");
+      try {
+        const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`, {
+          signal: controller.signal,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(typeof data?.error === "string" ? data.error : "Search failed");
+        }
+        setPeopleResults(Array.isArray(data?.results) ? data.results : []);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setPeopleResults([]);
+        setPeopleError(err instanceof Error ? err.message : "Search failed");
+      } finally {
+        if (!controller.signal.aborted) setPeopleLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(t);
+    };
+  }, [peopleQuery, section]);
+
+  const sendRequest = async (toUserId) => {
+    try {
+      const res = await fetch("/api/requests", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ toUserId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : "Failed to send request");
+      setPeopleResults((prev) =>
+        prev.map((p) =>
+          p.userId === toUserId
+            ? { ...p, requestStatus: data?.status || "outgoing", requestId: data?.requestId || p.requestId }
+            : p
+        )
+      );
+      refreshRequests();
+      toast.success("Request sent");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send request");
+    }
+  };
+
+  const updateRequest = async (requestId, action) => {
+    try {
+      const res = await fetch("/api/requests", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestId, action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : "Failed to update request");
+      refreshRequests();
+      setPeopleResults((prev) =>
+        prev.map((p) =>
+          p.requestId === requestId
+            ? { ...p, requestStatus: data?.status === "accepted" ? "friends" : "none" }
+            : p
+        )
+      );
+      if (action === "accept") toast.success("Request accepted");
+      else if (action === "decline") toast.success("Request declined");
+      else if (action === "cancel") toast.success("Request cancelled");
+      else toast.success("Request updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update request");
+    }
+  };
 
   function sendDraft() {
     if (!draft.trim() || !activeId) return;
@@ -666,19 +710,6 @@ export default function Home() {
               />
             </svg>
           </button>
-          <div className="relative">
-            <button
-              onClick={() => setSection("status")}
-              className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                section === "status" ? "bg-[#202c33] text-white" : "text-zinc-300 hover:bg-[#24323a]"
-              }`}
-              aria-label="Status"
-            >
-              <Icon name="status" className="h-5 w-5" />
-            </button>
-            <span className="absolute right-0 top-0 h-2 w-2 rounded-full bg-emerald-500"></span>
-          </div>
-       
           <button
             onClick={() => {
               setSection("groups");
@@ -690,6 +721,21 @@ export default function Home() {
             aria-label="Groups"
           >
             <Image src="/group.gif" alt="Groups" width={20} height={20} className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSection("people");
+              setFilter("All");
+              setPeopleQuery("");
+              setPeopleResults([]);
+            }}
+            className={`flex h-10 w-10 items-center justify-center rounded-full ${
+              section === "people" ? "bg-[#202c33] text-white" : "text-zinc-300 hover:bg-[#24323a]"
+            }`}
+            aria-label="Find people"
+          >
+            <Image src="/add-user.svg" alt="Find people" width={20} height={20} className="h-5 w-5" />
           </button>
           <div className="my-2 h-px w-8 bg-zinc-800" />
           <button
@@ -755,7 +801,7 @@ export default function Home() {
       ) : (
         <>
           <aside className="w-[360px] border-r border-zinc-800 bg-[#111b21]">
-            {section === "status" ? (
+            {section === "people" ? (
               <>
                 <div className="flex h-14 items-center justify-between px-3">
                   <div className="flex items-center gap-2">
@@ -766,49 +812,183 @@ export default function Home() {
                       height={24}
                       className="rounded-sm"
                     />
-                    <span className="text-sm font-semibold">Status</span>
+                    <span className="text-sm font-semibold">Add people</span>
                   </div>
                   <div className="flex items-center gap-3 text-zinc-400">
                     <Icon name="more" className="h-5 w-5" />
                   </div>
                 </div>
                 <div className="px-3">
-                  <div className="flex items-center gap-3 px-1 py-2">
-                    <div className="rounded-full p-[2px] bg-gradient-to-br from-emerald-500 to-emerald-400">
-                      <Image
-                        src="https://i.pinimg.com/564x/4b/39/0e/4b390e1c1a8e4d9c9b4d4b8f2e5e0ff9.jpg"
-                        alt="My status"
-                        width={36}
-                        height={36}
-                        className="h-9 w-9 rounded-full object-cover"
-                      />
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="text-sm">My status</span>
-                      <span className="text-[11px] text-zinc-400">Tap to add status update</span>
-                    </div>
+                  <div className="group relative flex items-center rounded-lg bg-[#202c33] px-3 py-2 text-sm text-zinc-300">
+                    <Icon name="search" className="h-4 w-4 text-zinc-400" />
+                    <input
+                      value={peopleQuery}
+                      onChange={(e) => setPeopleQuery(e.target.value)}
+                      placeholder="Search by name or email"
+                      className="ml-2 w-full bg-transparent outline-none placeholder:text-zinc-500"
+                    />
                   </div>
-                  <div className="mt-2 text-[11px] uppercase tracking-wide text-zinc-500">
-                    Recent updates
-                  </div>
+                  {peopleError ? <div className="mt-2 text-xs text-red-400">{peopleError}</div> : null}
                 </div>
                 <div className="mt-2 space-y-1 px-3 pb-3">
-                  {statuses.length ? (
-                    statuses.map((s) => (
-                      <StatusItem
-                        key={s.id}
-                        s={s}
-                        active={s.id === activeStatusId}
-                        onClick={() => {
-                          setActiveStatusId(s.id);
-                          setStatuses((prev) =>
-                            prev.map((x) => (x.id === s.id ? { ...x, seen: true } : x))
-                          );
-                        }}
-                      />
+                  {peopleLoading ? (
+                    <div className="px-1 py-4 text-xs text-zinc-500">Searching...</div>
+                  ) : peopleResults.length ? (
+                    peopleResults.map((p) => (
+                      <div
+                        key={p.userId}
+                        className="flex items-center justify-between gap-3 rounded-md px-3 py-2 hover:bg-zinc-800/60"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar name={p.name || p.email || "User"} src={p.picture || ""} />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-zinc-100">
+                              {p.name || p.email || "User"}
+                            </div>
+                            <div className="truncate text-xs text-zinc-400">
+                              {p.email || p.about || ""}
+                            </div>
+                          </div>
+                        </div>
+                        {p.requestStatus === "friends" ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 opacity-70"
+                          >
+                            Added
+                          </button>
+                        ) : p.requestStatus === "outgoing" ? (
+                          <button
+                            type="button"
+                            onClick={() => updateRequest(p.requestId, "cancel")}
+                            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 hover:bg-zinc-700"
+                          >
+                            Cancel
+                          </button>
+                        ) : p.requestStatus === "incoming" ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => updateRequest(p.requestId, "decline")}
+                              className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 hover:bg-zinc-700"
+                            >
+                              Decline
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateRequest(p.requestId, "accept")}
+                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                            >
+                              Accept
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => sendRequest(p.userId)}
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                          >
+                            Send
+                          </button>
+                        )}
+                      </div>
                     ))
+                  ) : peopleQuery.trim().length >= 2 ? (
+                    <div className="px-1 py-4 text-xs text-zinc-500">No users found</div>
                   ) : (
-                    <div className="px-1 py-4 text-xs text-zinc-500">No status updates</div>
+                    <div className="px-1 py-4 text-xs text-zinc-500">Type at least 2 characters</div>
+                  )}
+                </div>
+
+                <div className="border-t border-zinc-800 px-3 py-3">
+                  <div className="text-[11px] uppercase tracking-wide text-zinc-500">Requests</div>
+                  {requestsError ? <div className="mt-2 text-xs text-red-400">{requestsError}</div> : null}
+                  {requestsLoading ? (
+                    <div className="mt-2 text-xs text-zinc-500">Loading...</div>
+                  ) : (
+                    <div className="mt-2 space-y-2">
+                      <div>
+                        <div className="text-xs font-medium text-zinc-300">Incoming</div>
+                        {incomingRequests.length ? (
+                          <div className="mt-1 space-y-1">
+                            {incomingRequests.map((r) => (
+                              <div
+                                key={r.id}
+                                className="flex items-center justify-between gap-3 rounded-md px-2 py-2 hover:bg-zinc-800/60"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <Avatar
+                                    name={r.other?.name || r.other?.email || "User"}
+                                    src={r.other?.picture || ""}
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm text-zinc-100">
+                                      {r.other?.name || r.other?.email || "User"}
+                                    </div>
+                                    <div className="truncate text-xs text-zinc-400">{r.other?.email || ""}</div>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateRequest(r.id, "decline")}
+                                    className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 hover:bg-zinc-700"
+                                  >
+                                    Decline
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateRequest(r.id, "accept")}
+                                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                                  >
+                                    Accept
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-xs text-zinc-500">No incoming requests</div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="text-xs font-medium text-zinc-300">Outgoing</div>
+                        {outgoingRequests.length ? (
+                          <div className="mt-1 space-y-1">
+                            {outgoingRequests.map((r) => (
+                              <div
+                                key={r.id}
+                                className="flex items-center justify-between gap-3 rounded-md px-2 py-2 hover:bg-zinc-800/60"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <Avatar
+                                    name={r.other?.name || r.other?.email || "User"}
+                                    src={r.other?.picture || ""}
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm text-zinc-100">
+                                      {r.other?.name || r.other?.email || "User"}
+                                    </div>
+                                    <div className="truncate text-xs text-zinc-400">{r.other?.email || ""}</div>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => updateRequest(r.id, "cancel")}
+                                  className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 hover:bg-zinc-700"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-xs text-zinc-500">No outgoing requests</div>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               </>
@@ -874,8 +1054,15 @@ export default function Home() {
             )}
           </aside>
 
-          {section === "status" ? (
-            <StatusViewer status={statuses.find((x) => x.id === activeStatusId) || null} />
+          {section === "people" ? (
+            <section className="flex min-h-screen flex-1 flex-col bg-[#0b141a]">
+              <div className="flex h-14 items-center justify-between border-b border-zinc-800 bg-[#202c33] px-4">
+                <div className="text-sm font-medium">Global search</div>
+              </div>
+              <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+                Search for users and send requests
+              </div>
+            </section>
           ) : section === "ai" ? (
             <PeerCallPanel />
           ) : (

@@ -1,36 +1,78 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+## WhatsApp Clone (Next.js)
 
 ## Getting Started
 
-First, run the development server:
+### 1) Install
+
+```bash
+npm install
+```
+
+### 2) Environment variables
+
+Create `.env.local` in the project root (it is gitignored) and set:
+
+```bash
+MONGODB_URI="your_mongodb_connection_string"
+MONGODB_DB="whatsapp_clone"
+```
+
+### 3) Run the app
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## Login (Email + PIN)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- If you are not logged in, visiting `/` redirects to `/login`.
+- Login uses an email + numeric PIN (4–12 digits).
+- On first login with a new email, an account is created and the PIN is stored hashed in MongoDB.
+- Auth is cookie-based (demo auth, no email verification).
 
-## Learn More
+Files:
+- Login page: [login/page.js](file:///c:/Users/acer/Coding%20stuff/New%20folder%20(3)/whatsapp_clone/app/login/page.js)
+- Middleware redirect: [middleware.js](file:///c:/Users/acer/Coding%20stuff/New%20folder%20(3)/whatsapp_clone/middleware.js)
 
-To learn more about Next.js, take a look at the following resources:
+## Profile storage (MongoDB)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+User profile fields (`name`, `about`, `picture`) are stored in MongoDB.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+MongoDB collections:
+- `users`: one document per email (stores `userId`, `pinSalt`, `pinHash`)
+- `profiles`: one document per userId (`_id` is the `userId`)
 
-## Deploy on Vercel
+API routes:
+- `POST /api/auth/login` (creates/validates account, sets cookies)
+- `GET /api/auth/me` (returns current userId + profile)
+- `POST /api/auth/logout` (clears cookies)
+- `GET /api/profile/:userId` (returns profile, requires auth cookies)
+- `PUT /api/profile/:userId` (updates profile, requires auth cookies)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+MongoDB connector:
+- [mongodb.js](file:///c:/Users/acer/Coding%20stuff/New%20folder%20(3)/whatsapp_clone/lib/mongodb.js)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## WebRTC calling (PeerJS)
+
+There is a simple 1:1 audio/video calling panel using PeerJS (public PeerJS server).
+- Each user gets a Peer ID.
+- You can call another user by entering their Peer ID.
+- Supports answering and ending calls, plus mute/video toggles.
+
+Main UI entry:
+- The “AI” section shows the call panel: [page.js](file:///c:/Users/acer/Coding%20stuff/New%20folder%20(3)/whatsapp_clone/app/page.js)
+
+Limitations:
+- Peer-to-peer calls can fail behind strict NAT/firewalls without TURN.
+- The public PeerJS server is for demos and may be unreliable for production.
+
+## Scripts
+
+```bash
+npm run dev
+npm run build
+npm run start
+npm run lint
+```
