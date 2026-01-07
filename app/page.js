@@ -503,6 +503,8 @@ export default function Home() {
 
   const [activeId, setActiveId] = useState(chats[0]?.id || "");
   const [messages, setMessages] = useState({});
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const messagesRef = useRef({});
 
   const activeChat = useMemo(
     () => chats.find((c) => c.id === activeId),
@@ -574,6 +576,121 @@ export default function Home() {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [userId]);
+
+  const mergeChatMessages = (chatId, newItems) => {
+    if (!chatId) return;
+    if (!Array.isArray(newItems) || newItems.length === 0) return;
+    setMessages((prev) => {
+      const existing = Array.isArray(prev[chatId]) ? prev[chatId] : [];
+      const seen = new Set(existing.map((m) => m.id));
+      const merged = [...existing];
+      for (const m of newItems) {
+        if (!m?.id || seen.has(m.id)) continue;
+        merged.push(m);
+        seen.add(m.id);
+      }
+      merged.sort((a, b) => {
+        const aMs = typeof a?.createdAt === "string" ? Date.parse(a.createdAt) : NaN;
+        const bMs = typeof b?.createdAt === "string" ? Date.parse(b.createdAt) : NaN;
+        return (Number.isFinite(aMs) ? aMs : 0) - (Number.isFinite(bMs) ? bMs : 0);
+      });
+      return { ...prev, [chatId]: merged };
+    });
+  };
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const fetchChatMessages = async (chatId, after) => {
+    if (!userId || !chatId) return [];
+    const url = new URL("/api/messages", window.location.origin);
+    url.searchParams.set("with", chatId);
+    if (after) url.searchParams.set("after", after);
+    const res = await fetch(url.toString());
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(typeof data?.error === "string" ? data.error : "Failed to load messages");
+    }
+    const list = Array.isArray(data?.messages) ? data.messages : [];
+    const mapped = [];
+    for (const m of list) {
+      const createdAt = typeof m?.createdAt === "string" ? m.createdAt : "";
+      const ms = createdAt ? Date.parse(createdAt) : NaN;
+      const time = Number.isFinite(ms)
+        ? new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : "";
+      mapped.push({
+        id: String(m.id || ""),
+        sender: m.fromUserId === userId ? "me" : "other",
+        type: "text",
+        text: typeof m?.text === "string" ? m.text : "",
+        time,
+        createdAt,
+      });
+    }
+    return mapped.filter((x) => x.id);
+  };
+
+  useEffect(() => {
+    if (section !== "chats") return;
+    if (!userId) return;
+    if (!activeId) return;
+
+    let cancelled = false;
+    const load = async () => {
+      setMessagesLoading(true);
+      try {
+        const items = await fetchChatMessages(activeId);
+        if (!cancelled) {
+          setMessages((prev) => ({ ...prev, [activeId]: items }));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : "Failed to load messages");
+        }
+      } finally {
+        if (!cancelled) setMessagesLoading(false);
+      }
+    };
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, section, userId]);
+
+  useEffect(() => {
+    if (section !== "chats") return;
+    if (!userId) return;
+    if (!activeId) return;
+
+    const poll = async () => {
+      try {
+        const store = messagesRef.current;
+        const existing = Array.isArray(store?.[activeId]) ? store[activeId] : [];
+        const last = existing.length ? existing[existing.length - 1] : null;
+        const after = typeof last?.createdAt === "string" ? last.createdAt : "";
+        const items = await fetchChatMessages(activeId, after);
+        mergeChatMessages(activeId, items);
+        if (items.length) {
+          const lastItem = items[items.length - 1];
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === activeId
+                ? { ...c, lastMessage: lastItem.text, time: lastItem.time || "Now", unread: 0 }
+                : c
+            )
+          );
+        }
+      } catch {}
+    };
+
+    const t = window.setInterval(poll, 4000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, section, userId]);
 
   const [draft, setDraft] = useState("");
   const [peopleQuery, setPeopleQuery] = useState("");
@@ -782,25 +899,40 @@ export default function Home() {
     }
   };
 
-  function sendDraft() {
-    if (!draft.trim() || !activeId) return;
-    const item = {
-      id: Math.random().toString(36).slice(2),
-      sender: "me",
-      type: "text",
-      text: draft.trim(),
-      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    };
-    setMessages((prev) => ({
-      ...prev,
-      [activeId]: [...(prev[activeId] || []), item],
-    }));
-    setChats((prev) =>
-      prev.map((c) =>
-        c.id === activeId ? { ...c, lastMessage: item.text, time: "Now", unread: 0 } : c
-      )
-    );
+  async function sendDraft() {
+    const text = draft.trim();
+    if (!text || !activeId) return;
     setDraft("");
+    try {
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ toUserId: activeId, text }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data?.error === "string" ? data.error : "Failed to send message");
+      const m = data?.message;
+      const createdAt = typeof m?.createdAt === "string" ? m.createdAt : "";
+      const ms = createdAt ? Date.parse(createdAt) : NaN;
+      const time = Number.isFinite(ms)
+        ? new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : "Now";
+      const item = {
+        id: String(m?.id || ""),
+        sender: "me",
+        type: "text",
+        text: typeof m?.text === "string" ? m.text : text,
+        time,
+        createdAt,
+      };
+      mergeChatMessages(activeId, [item]);
+      setChats((prev) =>
+        prev.map((c) => (c.id === activeId ? { ...c, lastMessage: item.text, time: item.time, unread: 0 } : c))
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send message");
+      setDraft(text);
+    }
   }
 
   return (
@@ -1212,9 +1344,11 @@ export default function Home() {
                   <div className="flex-1 bg-[url('/vercel.svg')] bg-[length:400px] bg-center bg-no-repeat p-4">
                     <div className="mx-auto flex max-w-3xl flex-col gap-2">
                       <DateChip label="Yesterday" />
-                      {(messages[activeId] || []).map((m) => (
-                        <MessageBubble key={m.id} m={m} />
-                      ))}
+                      {messagesLoading ? (
+                        <div className="py-4 text-center text-xs text-zinc-500">Loading messages...</div>
+                      ) : (
+                        (messages[activeId] || []).map((m) => <MessageBubble key={m.id} m={m} />)
+                      )}
                       <DateChip label="Today" />
                     </div>
                   </div>
