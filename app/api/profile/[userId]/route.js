@@ -8,7 +8,7 @@ const USER_ID_COOKIE = "whatsapp_clone.userId";
 
 function sanitizeProfile(input) {
   const name = typeof input?.name === "string" ? input.name.trim().slice(0, 80) : "";
-  const about = typeof input?.about === "string" ? input.about.trim().slice(0, 240) : "";
+  const about = typeof input?.about === "string" ? input.about.trim().slice(0, 33) : "";
   const phone = typeof input?.phone === "string" ? input.phone.trim().slice(0, 32) : "";
   const picture = typeof input?.picture === "string" ? input.picture.trim().slice(0, 500) : "";
   return { name, about, phone, picture };

@@ -104,7 +104,8 @@ export default function LoginPage() {
               <div className="text-xs font-medium text-zinc-300">About</div>
               <input
                 value={about}
-                onChange={(e) => setAbout(e.target.value)}
+                onChange={(e) => setAbout(e.target.value.slice(0, 33))}
+                maxLength={33}
                 className="mt-1 w-full rounded-lg border border-zinc-700 bg-[#0b141a] px-3 py-2 text-sm outline-none focus:border-emerald-500"
                 placeholder="Hey there! I am using WhatsApp."
               />

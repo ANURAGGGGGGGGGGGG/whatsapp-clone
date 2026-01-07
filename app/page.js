@@ -87,7 +87,7 @@ function ChatItem({ chat, active, onClick }) {
         active ? "bg-zinc-800" : "hover:bg-zinc-800/60"
       }`}
     >
-      <Avatar name={chat.name} />
+      <Avatar name={chat.name} src={chat.picture || ""} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between">
           <span className="truncate text-sm font-medium text-zinc-100">
@@ -142,6 +142,26 @@ function DateChip({ label }) {
       {label}
     </div>
   );
+}
+
+function getPresenceLabel(lastSeen, nowTs) {
+  const ts = typeof nowTs === "number" ? nowTs : Date.now();
+  const lastMs = typeof lastSeen === "string" ? Date.parse(lastSeen) : NaN;
+  if (!Number.isFinite(lastMs)) return "Offline";
+  const diffMs = Math.max(0, ts - lastMs);
+  if (diffMs <= 30_000) return "Online";
+
+  const mins = Math.max(1, Math.floor(diffMs / 60_000));
+  if (mins === 1) return "Last seen 1 min ago";
+  if (mins < 60) return `Last seen ${mins} min ago`;
+
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `Last seen ${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `Last seen ${days}d ago`;
+
+  return `Last seen ${new Date(lastMs).toLocaleDateString()}`;
 }
 
 function PeerCallPanel() {
@@ -479,6 +499,7 @@ export default function Home() {
   const [userId, setUserId] = useState("");
   const [settingsActive, setSettingsActive] = useState(null);
   const [chats, setChats] = useState([]);
+  const [nowTs, setNowTs] = useState(() => Date.now());
 
   const [activeId, setActiveId] = useState(chats[0]?.id || "");
   const [messages, setMessages] = useState({});
@@ -529,6 +550,31 @@ export default function Home() {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const t = window.setInterval(() => setNowTs(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    const ping = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        await fetch("/api/auth/me", { method: "PATCH" });
+      } catch {}
+    };
+    ping();
+    const t = window.setInterval(ping, 25_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") ping();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [userId]);
+
   const [draft, setDraft] = useState("");
   const [peopleQuery, setPeopleQuery] = useState("");
   const [peopleResults, setPeopleResults] = useState([]);
@@ -538,6 +584,7 @@ export default function Home() {
   const [requestsError, setRequestsError] = useState("");
   const [incomingRequests, setIncomingRequests] = useState([]);
   const [outgoingRequests, setOutgoingRequests] = useState([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
 
   const refreshRequests = async () => {
     setRequestsLoading(true);
@@ -565,10 +612,62 @@ export default function Home() {
     }
   };
 
+  const refreshContacts = async () => {
+    if (!userId) return;
+    setContactsLoading(true);
+    try {
+      const res = await fetch("/api/contacts");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to load contacts");
+      }
+      const contacts = Array.isArray(data?.contacts) ? data.contacts : [];
+      const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      setChats((prev) => {
+        const next = [...prev];
+        for (const c of contacts) {
+          const id = typeof c?.userId === "string" ? c.userId : "";
+          if (!id) continue;
+          const name = typeof c?.name === "string" && c.name.trim() ? c.name.trim() : c?.email || "User";
+          const picture = typeof c?.picture === "string" ? c.picture : "";
+          const lastSeen = typeof c?.lastSeen === "string" ? c.lastSeen : "";
+          const existingIndex = next.findIndex((x) => x.id === id);
+          if (existingIndex === -1) {
+            next.push({ id, name, picture, lastSeen, time: now, lastMessage: "", unread: 0 });
+          } else {
+            next[existingIndex] = { ...next[existingIndex], name, picture, lastSeen };
+          }
+        }
+        return next;
+      });
+      setMessages((prev) => {
+        const next = { ...prev };
+        for (const c of contacts) {
+          const id = typeof c?.userId === "string" ? c.userId : "";
+          if (!id) continue;
+          if (!next[id]) next[id] = [];
+        }
+        return next;
+      });
+    } catch {
+    } finally {
+      setContactsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (section !== "people") return;
     if (!userId) return;
     refreshRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, userId]);
+
+  useEffect(() => {
+    if (section !== "chats") return;
+    if (!userId) return;
+    refreshContacts();
+    const t = window.setInterval(refreshContacts, 30_000);
+    return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section, userId]);
 
@@ -610,6 +709,26 @@ export default function Home() {
     };
   }, [peopleQuery, section]);
 
+  const openChatWithUser = (other) => {
+    const chatId = typeof other?.userId === "string" ? other.userId.trim() : "";
+    if (!chatId) return;
+    const name = typeof other?.name === "string" && other.name.trim() ? other.name.trim() : other?.email || "User";
+    const picture = typeof other?.picture === "string" ? other.picture : "";
+    const lastSeen = typeof other?.lastSeen === "string" ? other.lastSeen : "";
+    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    setChats((prev) => {
+      const exists = prev.some((c) => c.id === chatId);
+      const next = exists
+        ? prev.map((c) => (c.id === chatId ? { ...c, name, picture, lastSeen } : c))
+        : [{ id: chatId, name, picture, lastSeen, time: now, lastMessage: "", unread: 0 }, ...prev];
+      return next;
+    });
+    setMessages((prev) => (prev[chatId] ? prev : { ...prev, [chatId]: [] }));
+    setActiveId(chatId);
+    setSection("chats");
+    setFilter("All");
+  };
+
   const sendRequest = async (toUserId) => {
     try {
       const res = await fetch("/api/requests", {
@@ -633,7 +752,7 @@ export default function Home() {
     }
   };
 
-  const updateRequest = async (requestId, action) => {
+  const updateRequest = async (requestId, action, other) => {
     try {
       const res = await fetch("/api/requests", {
         method: "PATCH",
@@ -650,7 +769,11 @@ export default function Home() {
             : p
         )
       );
-      if (action === "accept") toast.success("Request accepted");
+      if (action === "accept") {
+        toast.success("Request accepted");
+        if (other) openChatWithUser(other);
+        refreshContacts();
+      }
       else if (action === "decline") toast.success("Request declined");
       else if (action === "cancel") toast.success("Request cancelled");
       else toast.success("Request updated");
@@ -877,7 +1000,7 @@ export default function Home() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => updateRequest(p.requestId, "accept")}
+                              onClick={() => updateRequest(p.requestId, "accept", p)}
                               className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
                             >
                               Accept
@@ -939,7 +1062,7 @@ export default function Home() {
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => updateRequest(r.id, "accept")}
+                                    onClick={() => updateRequest(r.id, "accept", r.other)}
                                     className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
                                   >
                                     Accept
@@ -1071,10 +1194,12 @@ export default function Home() {
                 <>
                   <div className="flex h-14 items-center justify-between border-b border-zinc-800 bg-[#202c33] px-4">
                     <div className="flex items-center gap-3">
-                      <Avatar name={activeChat.name} />
+                      <Avatar name={activeChat.name} src={activeChat.picture || ""} />
                       <div className="flex flex-col">
                         <span className="text-sm font-medium">{activeChat.name}</span>
-                        <span className="text-[11px] text-zinc-400">Online</span>
+                        <span className="text-[11px] text-zinc-400">
+                          {getPresenceLabel(activeChat.lastSeen, nowTs)}
+                        </span>
                       </div>
                     </div>
                     <div className="flex items-center gap-4 text-zinc-300">

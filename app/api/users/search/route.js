@@ -14,7 +14,13 @@ function sanitizeProfile(input) {
   const name = typeof input?.name === "string" ? input.name.trim().slice(0, 80) : "";
   const about = typeof input?.about === "string" ? input.about.trim().slice(0, 240) : "";
   const picture = typeof input?.picture === "string" ? input.picture.trim().slice(0, 500) : "";
-  return { name, about, picture };
+  const lastSeen =
+    input?.lastSeen instanceof Date
+      ? input.lastSeen.toISOString()
+      : typeof input?.lastSeen === "string"
+        ? input.lastSeen
+        : "";
+  return { name, about, picture, lastSeen };
 }
 
 export async function GET(req) {
@@ -45,7 +51,10 @@ export async function GET(req) {
       .find({ _id: rx }, { projection: { _id: 1, email: 1, userId: 1 } })
       .limit(10)
       .toArray(),
-    profilesCol.find({ name: rx }, { projection: { _id: 1, name: 1, about: 1, picture: 1 } }).limit(10).toArray(),
+    profilesCol
+      .find({ name: rx }, { projection: { _id: 1, name: 1, about: 1, picture: 1, lastSeen: 1 } })
+      .limit(10)
+      .toArray(),
   ]);
 
   const candidateUserIds = new Set();
@@ -71,7 +80,9 @@ export async function GET(req) {
   }
 
   const [profiles, usersForIds, requests, contacts] = await Promise.all([
-    profilesCol.find({ _id: { $in: userIds } }, { projection: { _id: 1, name: 1, about: 1, picture: 1 } }).toArray(),
+    profilesCol
+      .find({ _id: { $in: userIds } }, { projection: { _id: 1, name: 1, about: 1, picture: 1, lastSeen: 1 } })
+      .toArray(),
     usersCol.find({ userId: { $in: userIds } }, { projection: { _id: 1, userId: 1 } }).toArray(),
     requestsCol
       .find(
@@ -121,4 +132,3 @@ export async function GET(req) {
 
   return Response.json({ results });
 }
-

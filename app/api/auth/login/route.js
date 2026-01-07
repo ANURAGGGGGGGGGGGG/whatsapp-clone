@@ -43,7 +43,7 @@ function generateUserId() {
 
 function sanitizeProfile(input) {
   const name = typeof input?.name === "string" ? input.name.trim().slice(0, 80) : "";
-  const about = typeof input?.about === "string" ? input.about.trim().slice(0, 240) : "";
+  const about = typeof input?.about === "string" ? input.about.trim().slice(0, 33) : "";
   const picture = typeof input?.picture === "string" ? input.picture.trim().slice(0, 500) : "";
   return { name, about, phone: "", picture };
 }

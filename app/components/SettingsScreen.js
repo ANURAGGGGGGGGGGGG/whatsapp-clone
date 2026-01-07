@@ -143,6 +143,7 @@ export default function SettingsScreen({
   const [profile, setProfile] = useState(defaultProfile);
   const [profileReady, setProfileReady] = useState(false);
   const skipNextPersistRef = useRef(true);
+  const defaultProfileRef = useRef(defaultProfile);
   const [editing, setEditing] = useState(null);
   const [draftValue, setDraftValue] = useState("");
   const [copied, setCopied] = useState(false);
@@ -164,6 +165,10 @@ export default function SettingsScreen({
   useEffect(() => {
     setActive(initialActive ?? null);
   }, [initialActive]);
+
+  useEffect(() => {
+    defaultProfileRef.current = defaultProfile;
+  }, [defaultProfile]);
 
   useEffect(() => {
     if (!providedUserId && typeof window !== "undefined") {
@@ -212,10 +217,10 @@ export default function SettingsScreen({
             picture: typeof incoming?.picture === "string" ? incoming.picture : prev.picture,
           }));
         } else {
-          setProfile(defaultProfile);
+          setProfile(defaultProfileRef.current);
         }
       } catch {
-        setProfile(defaultProfile);
+        setProfile(defaultProfileRef.current);
       } finally {
         setProfileReady(true);
       }
@@ -226,7 +231,7 @@ export default function SettingsScreen({
     return () => {
       controller.abort();
     };
-  }, [defaultProfile, resolvedUserId]);
+  }, [resolvedUserId]);
 
   useEffect(() => {
     if (typeof onProfileChange === "function") {
@@ -275,6 +280,10 @@ export default function SettingsScreen({
       setDraftValue("");
       return;
     }
+    if (field === "about") {
+      setDraftValue(profile.about?.trim() ? profile.about : defaultProfile.about);
+      return;
+    }
     setDraftValue(String(profile[field] ?? ""));
   };
 
@@ -287,6 +296,7 @@ export default function SettingsScreen({
 
   const saveEditing = () => {
     if (!editing) return;
+    const savedField = editing.field;
     if (editing.field === "phone") {
       const nationalDigits = String(phoneNational || "").replace(/\D/g, "");
       const min = selectedPhoneCountry?.min ?? 1;
@@ -298,9 +308,16 @@ export default function SettingsScreen({
       const dial = selectedPhoneCountry.dial;
       setProfile((prev) => ({ ...prev, phone: `${dial} ${nationalDigits}` }));
       cancelEditing();
+      toast.success("Phone number updated successfully");
       return;
     }
     let nextValue = draftValue.trim();
+    if (editing.field === "about" && !nextValue) {
+      nextValue = defaultProfile.about;
+    }
+    if (editing.field === "about") {
+      nextValue = nextValue.slice(0, 33);
+    }
     if (editing.field === "picture" && nextValue && !/^https?:\/\//i.test(nextValue)) {
       nextValue = `https://${nextValue}`;
     }
@@ -310,6 +327,15 @@ export default function SettingsScreen({
     }
     setProfile((prev) => ({ ...prev, [editing.field]: nextValue }));
     cancelEditing();
+    if (savedField === "about") {
+      toast.success("About edited successfully");
+    }
+    if (savedField === "name") {
+      toast.success("Name updated successfully");
+    }
+    if (savedField === "picture") {
+      toast.success("Profile photo changed");
+    }
   };
 
   const copyPhone = async () => {
@@ -701,7 +727,8 @@ export default function SettingsScreen({
                         <textarea
                           value={draftValue}
                           autoFocus
-                          onChange={(e) => setDraftValue(e.target.value)}
+                          maxLength={33}
+                          onChange={(e) => setDraftValue(e.target.value.slice(0, 33))}
                           className="mt-3 h-24 w-full resize-none rounded-lg bg-[#111b21] px-3 py-2 text-sm text-zinc-100 outline-none ring-1 ring-zinc-800 focus:ring-emerald-500/60"
                         />
                       ) : (
@@ -757,7 +784,7 @@ export default function SettingsScreen({
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-xs text-emerald-400">About</div>
-                      <div className="mt-1 text-zinc-100">{profile.about}</div>
+                      <div className="mt-1 text-zinc-100">{profile.about?.trim() ? profile.about : defaultProfile.about}</div>
                     </div>
                     <button
                       onClick={() => startEditing("about", "About")}
