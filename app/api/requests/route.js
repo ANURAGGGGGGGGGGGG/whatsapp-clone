@@ -11,13 +11,14 @@ function sanitizeProfile(input) {
   const name = typeof input?.name === "string" ? input.name.trim().slice(0, 80) : "";
   const about = typeof input?.about === "string" ? input.about.trim().slice(0, 240) : "";
   const picture = typeof input?.picture === "string" ? input.picture.trim().slice(0, 500) : "";
+  const peerId = typeof input?.peerId === "string" ? input.peerId.trim().slice(0, 128) : "";
   const lastSeen =
     input?.lastSeen instanceof Date
       ? input.lastSeen.toISOString()
       : typeof input?.lastSeen === "string"
         ? input.lastSeen
         : "";
-  return { name, about, picture, lastSeen };
+  return { name, about, picture, peerId, lastSeen };
 }
 
 function contactDocId(userId, contactUserId) {
@@ -63,7 +64,10 @@ export async function GET(req) {
 
   const [profiles, users] = await Promise.all([
     profilesCol
-      .find({ _id: { $in: otherIds } }, { projection: { _id: 1, name: 1, about: 1, picture: 1, lastSeen: 1 } })
+      .find(
+        { _id: { $in: otherIds } },
+        { projection: { _id: 1, name: 1, about: 1, picture: 1, peerId: 1, lastSeen: 1 } }
+      )
       .toArray(),
     usersCol.find({ userId: { $in: otherIds } }, { projection: { _id: 1, userId: 1 } }).toArray(),
   ]);

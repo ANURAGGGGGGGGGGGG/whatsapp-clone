@@ -80,6 +80,7 @@ function Avatar({ name, src }) {
 }
 
 function ChatItem({ chat, active, onClick }) {
+  const unreadLabel = chat.unread >= 5 ? "4+" : String(chat.unread || "");
   return (
     <button
       onClick={onClick}
@@ -93,17 +94,18 @@ function ChatItem({ chat, active, onClick }) {
           <span className="truncate text-sm font-medium text-zinc-100">
             {chat.name}
           </span>
-          <span className="text-[11px] text-zinc-400">{chat.time}</span>
+          {chat.unread ? (
+            <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-emerald-600 px-2 text-[11px] font-semibold text-white">
+              {unreadLabel}
+            </span>
+          ) : (
+            <span className="text-[11px] text-zinc-400">{chat.time}</span>
+          )}
         </div>
         <div className="flex items-center justify-between">
           <span className="truncate text-xs text-zinc-400">
             {chat.lastMessage}
           </span>
-          {chat.unread ? (
-            <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-emerald-600 px-2 text-[11px] font-semibold text-white">
-              {chat.unread}
-            </span>
-          ) : null}
         </div>
       </div>
     </button>
@@ -500,11 +502,19 @@ export default function Home() {
   const [settingsActive, setSettingsActive] = useState(null);
   const [chats, setChats] = useState([]);
   const [nowTs, setNowTs] = useState(() => Date.now());
+  const chatsRef = useRef([]);
 
   const [activeId, setActiveId] = useState(chats[0]?.id || "");
   const [messages, setMessages] = useState({});
   const [messagesLoading, setMessagesLoading] = useState(false);
   const messagesRef = useRef({});
+  const peerRef = useRef(null);
+  const localAudioStreamRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+  const [myPeerId, setMyPeerId] = useState("");
+  const [callStatus, setCallStatus] = useState("");
+  const [incomingCall, setIncomingCall] = useState(null);
+  const currentCallRef = useRef(null);
 
   const activeChat = useMemo(
     () => chats.find((c) => c.id === activeId),
@@ -577,6 +587,190 @@ export default function Home() {
     };
   }, [userId]);
 
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+
+    const ensureAudio = async () => {
+      if (localAudioStreamRef.current) return localAudioStreamRef.current;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (cancelled) {
+        stream.getTracks().forEach((t) => t.stop());
+        return null;
+      }
+      localAudioStreamRef.current = stream;
+      return stream;
+    };
+
+    const stopLocalAudio = () => {
+      const stream = localAudioStreamRef.current;
+      if (!stream) return;
+      stream.getTracks().forEach((t) => t.stop());
+      localAudioStreamRef.current = null;
+    };
+
+    const setRemoteStream = (stream) => {
+      const el = remoteAudioRef.current;
+      if (!el) return;
+      el.srcObject = stream;
+      el.play().catch(() => {});
+    };
+
+    const clearRemoteStream = () => {
+      const el = remoteAudioRef.current;
+      if (!el) return;
+      el.srcObject = null;
+    };
+
+    const endCall = (nextStatus = "") => {
+      const call = currentCallRef.current;
+      if (call) {
+        try {
+          call.close();
+        } catch {}
+      }
+      currentCallRef.current = null;
+      setIncomingCall(null);
+      clearRemoteStream();
+      stopLocalAudio();
+      setCallStatus(nextStatus);
+    };
+
+    const bindCall = (call, statusText) => {
+      currentCallRef.current = call;
+      setCallStatus(statusText);
+      call.on("stream", (remoteStream) => {
+        setRemoteStream(remoteStream);
+        setCallStatus("In call");
+      });
+      call.on("close", () => endCall(""));
+      call.on("error", (err) => {
+        setCallStatus(err?.message ? `Call error: ${err.message}` : "Call error");
+      });
+    };
+
+    const init = async () => {
+      try {
+        const mod = await import("peerjs");
+        const Peer = mod.default;
+        const peer = new Peer();
+        peerRef.current = peer;
+
+        peer.on("open", async (id) => {
+          if (cancelled) return;
+          setMyPeerId(id);
+          try {
+            await fetch("/api/auth/me", {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ peerId: id }),
+            });
+          } catch {}
+        });
+
+        peer.on("call", async (call) => {
+          if (cancelled) return;
+          const chatsNow = chatsRef.current;
+          const match = Array.isArray(chatsNow) ? chatsNow.find((c) => c?.peerId && c.peerId === call.peer) : null;
+          if (match?.id) {
+            setSection("chats");
+            setFilter("All");
+            setActiveId(match.id);
+          }
+          setIncomingCall(call);
+          setCallStatus("Incoming call…");
+        });
+
+        peer.on("disconnected", () => {
+          setCallStatus("Disconnected");
+        });
+        peer.on("close", () => {
+          setCallStatus("");
+        });
+        peer.on("error", (err) => {
+          setCallStatus(err?.message ? `Peer error: ${err.message}` : "Peer error");
+        });
+
+        window.__voiceCall = {
+          start: async (remotePeerId) => {
+            const p = peerRef.current;
+            if (!p || !remotePeerId) return;
+            endCall("");
+            let stream = null;
+            try {
+              stream = await ensureAudio();
+            } catch (err) {
+              setCallStatus(err?.message ? err.message : "Microphone permission denied");
+              return;
+            }
+            if (!stream) return;
+            try {
+              const c = p.call(remotePeerId, stream);
+              bindCall(c, "Calling…");
+            } catch (err) {
+              setCallStatus(err?.message ? err.message : "Could not start call");
+            }
+          },
+          accept: async () => {
+            const call = incomingCall;
+            let stream = null;
+            try {
+              stream = await ensureAudio();
+            } catch (err) {
+              setCallStatus(err?.message ? err.message : "Microphone permission denied");
+              return;
+            }
+            if (!call || !stream) return;
+            setIncomingCall(null);
+            try {
+              call.answer(stream);
+              bindCall(call, "Connecting…");
+            } catch (err) {
+              setCallStatus(err?.message ? err.message : "Could not answer call");
+            }
+          },
+          reject: () => {
+            const call = incomingCall;
+            setIncomingCall(null);
+            if (call) {
+              try {
+                call.close();
+              } catch {}
+            }
+            setCallStatus("");
+          },
+          end: () => endCall(""),
+        };
+      } catch (err) {
+        setCallStatus(err?.message ? err.message : "Voice call unavailable");
+      }
+    };
+
+    init();
+
+    return () => {
+      cancelled = true;
+      const peer = peerRef.current;
+      if (peer) {
+        try {
+          peer.destroy();
+        } catch {}
+        peerRef.current = null;
+      }
+        const stream = localAudioStreamRef.current;
+        if (stream) {
+          stream.getTracks().forEach((t) => t.stop());
+          localAudioStreamRef.current = null;
+        }
+      clearRemoteStream();
+      currentCallRef.current = null;
+      setIncomingCall(null);
+      setCallStatus("");
+      setMyPeerId("");
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
   const mergeChatMessages = (chatId, newItems) => {
     if (!chatId) return;
     if (!Array.isArray(newItems) || newItems.length === 0) return;
@@ -601,6 +795,10 @@ export default function Home() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    chatsRef.current = chats;
+  }, [chats]);
 
   const fetchChatMessages = async (chatId, after) => {
     if (!userId || !chatId) return [];
@@ -663,31 +861,59 @@ export default function Home() {
 
   useEffect(() => {
     if (section !== "chats") return;
-    if (!userId) return;
     if (!activeId) return;
+    setChats((prev) => prev.map((c) => (c.id === activeId ? { ...c, unread: 0 } : c)));
+  }, [activeId, section]);
 
-    const poll = async () => {
-      try {
-        const store = messagesRef.current;
-        const existing = Array.isArray(store?.[activeId]) ? store[activeId] : [];
-        const last = existing.length ? existing[existing.length - 1] : null;
-        const after = typeof last?.createdAt === "string" ? last.createdAt : "";
-        const items = await fetchChatMessages(activeId, after);
-        mergeChatMessages(activeId, items);
-        if (items.length) {
+  useEffect(() => {
+    if (section !== "chats") return;
+    if (!userId) return;
+
+    const pollAll = async () => {
+      const list = chatsRef.current;
+      if (!Array.isArray(list) || list.length === 0) return;
+
+      for (const chat of list) {
+        const chatId = typeof chat?.id === "string" ? chat.id : "";
+        if (!chatId) continue;
+
+        try {
+          const existing = Array.isArray(messagesRef.current?.[chatId])
+            ? messagesRef.current[chatId]
+            : [];
+          const last = existing.length ? existing[existing.length - 1] : null;
+          const after =
+            typeof last?.createdAt === "string" && last.createdAt
+              ? last.createdAt
+              : typeof chat?.lastMessageAt === "string" && chat.lastMessageAt
+                ? chat.lastMessageAt
+                : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+          const items = await fetchChatMessages(chatId, after);
+          if (!items.length) continue;
+
+          mergeChatMessages(chatId, items);
           const lastItem = items[items.length - 1];
+          const inc = chatId === activeId ? 0 : items.filter((x) => x.sender === "other").length;
+
           setChats((prev) =>
             prev.map((c) =>
-              c.id === activeId
-                ? { ...c, lastMessage: lastItem.text, time: lastItem.time || "Now", unread: 0 }
+              c.id === chatId
+                ? {
+                    ...c,
+                    lastMessage: lastItem.text,
+                    time: lastItem.time || c.time,
+                    lastMessageAt: lastItem.createdAt || c.lastMessageAt || "",
+                    unread: Math.max(0, (c.unread || 0) + inc),
+                  }
                 : c
             )
           );
-        }
-      } catch {}
+        } catch {}
+      }
     };
 
-    const t = window.setInterval(poll, 4000);
+    const t = window.setInterval(pollAll, 4000);
     return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, section, userId]);
@@ -747,12 +973,23 @@ export default function Home() {
           if (!id) continue;
           const name = typeof c?.name === "string" && c.name.trim() ? c.name.trim() : c?.email || "User";
           const picture = typeof c?.picture === "string" ? c.picture : "";
+          const peerId = typeof c?.peerId === "string" ? c.peerId : "";
           const lastSeen = typeof c?.lastSeen === "string" ? c.lastSeen : "";
           const existingIndex = next.findIndex((x) => x.id === id);
           if (existingIndex === -1) {
-            next.push({ id, name, picture, lastSeen, time: now, lastMessage: "", unread: 0 });
+            next.push({
+              id,
+              name,
+              picture,
+              peerId,
+              lastSeen,
+              time: now,
+              lastMessage: "",
+              lastMessageAt: "",
+              unread: 0,
+            });
           } else {
-            next[existingIndex] = { ...next[existingIndex], name, picture, lastSeen };
+            next[existingIndex] = { ...next[existingIndex], name, picture, peerId, lastSeen };
           }
         }
         return next;
@@ -831,13 +1068,17 @@ export default function Home() {
     if (!chatId) return;
     const name = typeof other?.name === "string" && other.name.trim() ? other.name.trim() : other?.email || "User";
     const picture = typeof other?.picture === "string" ? other.picture : "";
+    const peerId = typeof other?.peerId === "string" ? other.peerId : "";
     const lastSeen = typeof other?.lastSeen === "string" ? other.lastSeen : "";
     const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     setChats((prev) => {
       const exists = prev.some((c) => c.id === chatId);
       const next = exists
-        ? prev.map((c) => (c.id === chatId ? { ...c, name, picture, lastSeen } : c))
-        : [{ id: chatId, name, picture, lastSeen, time: now, lastMessage: "", unread: 0 }, ...prev];
+        ? prev.map((c) => (c.id === chatId ? { ...c, name, picture, peerId, lastSeen } : c))
+        : [
+            { id: chatId, name, picture, peerId, lastSeen, time: now, lastMessage: "", lastMessageAt: "", unread: 0 },
+            ...prev,
+          ];
       return next;
     });
     setMessages((prev) => (prev[chatId] ? prev : { ...prev, [chatId]: [] }));
@@ -927,7 +1168,11 @@ export default function Home() {
       };
       mergeChatMessages(activeId, [item]);
       setChats((prev) =>
-        prev.map((c) => (c.id === activeId ? { ...c, lastMessage: item.text, time: item.time, unread: 0 } : c))
+        prev.map((c) =>
+          c.id === activeId
+            ? { ...c, lastMessage: item.text, time: item.time, lastMessageAt: item.createdAt || c.lastMessageAt, unread: 0 }
+            : c
+        )
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to send message");
@@ -1335,11 +1580,69 @@ export default function Home() {
                       </div>
                     </div>
                     <div className="flex items-center gap-4 text-zinc-300">
-                      <Icon name="phone" className="h-5 w-5" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const pid = typeof activeChat?.peerId === "string" ? activeChat.peerId.trim() : "";
+                          if (!pid) {
+                            toast.error("User is not available for calls");
+                            return;
+                          }
+                          const api = window.__voiceCall;
+                          if (!api?.start) {
+                            toast.error("Voice call not ready");
+                            return;
+                          }
+                          api.start(pid);
+                        }}
+                        className="rounded-md p-2 hover:bg-[#24323a]"
+                        aria-label="Voice call"
+                      >
+                        <Icon name="phone" className="h-5 w-5" />
+                      </button>
                       <Icon name="video" className="h-5 w-5" />
                       <Icon name="more" className="h-5 w-5" />
                     </div>
                   </div>
+                  {incomingCall ? (
+                    <div className="border-b border-zinc-800 bg-[#0e181e] px-4 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 text-sm text-zinc-200">
+                          {activeChat?.peerId === incomingCall.peer ? `${activeChat.name} is calling…` : "Incoming call…"}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => window.__voiceCall?.reject?.()}
+                            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 hover:bg-zinc-700"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => window.__voiceCall?.accept?.()}
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                          >
+                            Accept
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                  {callStatus ? (
+                    <div className="border-b border-zinc-800 bg-[#0e181e] px-4 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 text-xs text-zinc-300">{callStatus}</div>
+                        <button
+                          type="button"
+                          onClick={() => window.__voiceCall?.end?.()}
+                          className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-100 hover:bg-zinc-700"
+                        >
+                          End
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div className="flex-1 bg-[url('/vercel.svg')] bg-[length:400px] bg-center bg-no-repeat p-4">
                     <div className="mx-auto flex max-w-3xl flex-col gap-2">
@@ -1392,6 +1695,7 @@ export default function Home() {
           )}
         </>
       )}
+      <audio ref={remoteAudioRef} />
     </div>
   );
 }

@@ -12,13 +12,14 @@ function sanitizeProfile(input) {
   const about = typeof input?.about === "string" ? input.about.trim().slice(0, 33) : "";
   const phone = typeof input?.phone === "string" ? input.phone.trim().slice(0, 32) : "";
   const picture = typeof input?.picture === "string" ? input.picture.trim().slice(0, 500) : "";
+  const peerId = typeof input?.peerId === "string" ? input.peerId.trim().slice(0, 128) : "";
   const lastSeen =
     input?.lastSeen instanceof Date
       ? input.lastSeen.toISOString()
       : typeof input?.lastSeen === "string"
         ? input.lastSeen
         : "";
-  return { name, about, phone, picture, lastSeen };
+  return { name, about, phone, picture, peerId, lastSeen };
 }
 
 export async function GET() {
@@ -46,7 +47,7 @@ export async function GET() {
   }
 }
 
-export async function PATCH() {
+export async function PATCH(req) {
   const cookieStore = await cookies();
   const auth = cookieStore.get(AUTH_COOKIE)?.value;
   const userId = cookieStore.get(USER_ID_COOKIE)?.value;
@@ -56,10 +57,15 @@ export async function PATCH() {
   }
 
   try {
+    const body = await req.json().catch(() => ({}));
+    const peerId = typeof body?.peerId === "string" ? body.peerId.trim().slice(0, 128) : "";
     const db = await getDb();
     await db.collection("profiles").updateOne(
       { _id: userId },
-      { $set: { lastSeen: new Date(), updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+      {
+        $set: { ...(peerId ? { peerId } : {}), lastSeen: new Date(), updatedAt: new Date() },
+        $setOnInsert: { createdAt: new Date() },
+      },
       { upsert: true }
     );
     return NextResponse.json({ ok: true });
