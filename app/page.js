@@ -369,6 +369,7 @@ function PeerCallPanel() {
               playsInline
               autoPlay
               className="aspect-video w-full rounded-lg bg-black object-cover"
+              style={{ transform: "scaleX(-1)" }}
             />
           </div>
 
